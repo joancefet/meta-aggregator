@@ -1,3 +1,4 @@
+import os
 import re
 from collections import defaultdict
 
@@ -413,9 +414,7 @@ def aggregate_tournaments_with_matchups(tournament_ids, min_players=20, meta_poo
 
     # Ordena por final_score
     base_rows.sort(key=lambda x: x["final_score"], reverse=True)
-    # Agora retornamos também os matchups agregados,
-    # para poder montar a matriz depois
-    return base_rows, matchups_agg
+    return base_rows
 
 
 # ---------- INTERFACE WEB (FLASK) ----------
@@ -510,29 +509,6 @@ https://labs.limitlesstcg.com/0046/decks
       </tr>
       {% endfor %}
     </table>
-    {% if matrix %}
-      <h2>Matriz de matchups entre os Top 10</h2>
-      <table>
-        <tr>
-          <th>Deck vs Deck</th>
-          {% for name in matrix_headers %}
-            <th style="max-width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ name }}</th>
-          {% endfor %}
-        </tr>
-        {% for i in range(matrix_headers|length) %}
-          <tr>
-            <th style="text-align:left">{{ matrix_headers[i] }}</th>
-            {% for j in range(matrix_headers|length) %}
-              <td>{{ matrix[i][j] }}</td>
-            {% endfor %}
-          </tr>
-        {% endfor %}
-      </table>
-      <p class="small">
-        Cada célula mostra o desempenho da linha contra a coluna:<br>
-        <code>W-L-T (Win%)</code>, por exemplo <code>6-4-0 (60.0%)</code> significa 6 vitórias, 4 derrotas, 0 empates, 60% de win rate.
-      </p>
-    {% endif %}
     <p class="small">
       Base Score = 0.4 * Overall Win% + 0.4 * Day 2 Win% + 0.2 * Conversion%<br>
       Matchup Score = soma, para cada deck do meta, de (Win% vs deck - 50) * peso_do_deck_no_meta<br>
@@ -561,8 +537,6 @@ def normalize_tournament_id(line):
 def index():
     results = None
     error = None
-    matrix = None
-    matrix_headers = None
 
     if request.method == "POST":
         raw = request.form.get("tournaments", "")
@@ -595,51 +569,20 @@ def index():
             error = "Nenhum ID de torneio válido encontrado."
         else:
             try:
-                all_results, matchups_agg = aggregate_tournaments_with_matchups(
+                all_results = aggregate_tournaments_with_matchups(
                     tids,
                     min_players=min_players,
                     meta_pool_size=meta_pool_size,
                     matchup_weight=matchup_weight,
                 )
-
                 if not all_results:
                     error = "Nenhum deck passou os filtros (talvez min_players esteja alto demais?)."
                 else:
-                    # Top 10
-                    results = all_results[:10]
-
-                    # --- Monta matriz de matchups entre o Top 10 ---
-                    matrix_headers = [row["deck"] for row in results]
-                    matrix = []
-
-                    for deck_a in matrix_headers:
-                        row = []
-                        for deck_b in matrix_headers:
-                            if deck_a == deck_b:
-                                row.append("-")
-                            else:
-                                stats = matchups_agg.get(deck_a, {}).get(deck_b)
-                                if not stats:
-                                    row.append("")
-                                else:
-                                    g = stats["wins"] + stats["losses"] + stats["ties"]
-                                    if g > 0:
-                                        wr = (stats["wins"] + 0.5 * stats["ties"]) / g * 100
-                                        cell = f'{stats["wins"]}-{stats["losses"]}-{stats["ties"]} ({wr:.1f}%)'
-                                    else:
-                                        cell = ""
-                                    row.append(cell)
-                        matrix.append(row)
+                    results = all_results[:10]  # Top 10
             except Exception as e:
                 error = f"Falha ao buscar/parsear dados: {e}"
 
-    return render_template_string(
-    HTML_TEMPLATE,
-    results=results,
-    error=error,
-    matrix=matrix,
-    matrix_headers=matrix_headers,
-    )
+    return render_template_string(HTML_TEMPLATE, results=results, error=error)
 
 
 if __name__ == "__main__":
