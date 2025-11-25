@@ -441,6 +441,11 @@ HTML_TEMPLATE = """
     .btn { background: #ffcc00; color: #000; border: none; padding: 8px 16px; cursor: pointer; margin-top: 10px; font-weight: bold; }
     .btn:hover { background: #ffdd33; }
     .container { max-width: 1200px; margin: auto; }
+    td.cell-good  { background: #1b5e20; color: #fff; }  /* verde */
+    td.cell-bad   { background: #7f1d1d; color: #fff; }  /* vermelho */
+    td.cell-neutral { background: #424242; color: #fff; }/* cinza médio */
+    td.cell-empty { background: #222; color: #666; }      /* vazio */
+    td.cell-diag  { background: #303030; color: #ccc; font-weight: bold; } /* diagonal */
   </style>
 </head>
 <body>
@@ -526,7 +531,26 @@ https://labs.limitlesstcg.com/0046/decks
           <tr>
             <th style="text-align:left">{{ matrix_headers[i] }}</th>
             {% for j in range(matrix_headers|length) %}
-              <td>{{ matrix[i][j] }}</td>
+              {% set cell = matrix[i][j] %}
+              <td class="
+                {% if cell.type == 'diag' %}
+                  cell-diag
+                {% elif cell.type == 'empty' %}
+                  cell-empty
+                {% elif cell.wr is not none %}
+                  {% if cell.wr >= 55 %}
+                    cell-good
+                  {% elif cell.wr <= 45 %}
+                    cell-bad
+                  {% else %}
+                    cell-neutral
+                  {% endif %}
+                {% else %}
+                  cell-empty
+                {% endif %}
+              ">
+                {{ cell.text }}
+              </td>
             {% endfor %}
           </tr>
         {% endfor %}
@@ -608,24 +632,25 @@ def index():
                     # Monta matriz de matchups entre o Top 10
                     matrix_headers = [row["deck"] for row in results]
                     matrix = []
-
+                    
                     for deck_a in matrix_headers:
                         row = []
                         for deck_b in matrix_headers:
                             if deck_a == deck_b:
-                                row.append("-")
+                                # diagonal (deck vs ele mesmo)
+                                row.append({"text": "-", "wr": None, "type": "diag"})
                             else:
                                 stats = matchups_agg.get(deck_a, {}).get(deck_b)
                                 if not stats:
-                                    row.append("")
+                                    row.append({"text": "", "wr": None, "type": "empty"})
                                 else:
                                     g = stats["wins"] + stats["losses"] + stats["ties"]
                                     if g > 0:
                                         wr = (stats["wins"] + 0.5 * stats["ties"]) / g * 100
-                                        cell = f'{stats["wins"]}-{stats["losses"]}-{stats["ties"]} ({wr:.1f}%)'
+                                        text = f'{stats["wins"]}-{stats["losses"]}-{stats["ties"]} ({wr:.1f}%)'
+                                        row.append({"text": text, "wr": wr, "type": "data"})
                                     else:
-                                        cell = ""
-                                    row.append(cell)
+                                        row.append({"text": "", "wr": None, "type": "empty"})
                         matrix.append(row)
             except Exception as e:
                 error = f"Falha ao buscar/parsear dados: {e}"
