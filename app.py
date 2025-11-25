@@ -379,9 +379,19 @@ def aggregate_tournaments_with_matchups(tournament_ids, min_players=20, meta_poo
                 continue
 
             for opp, stats in per_tournament_matchups.items():
-                matchups_agg[deck][opp]["wins"] += stats["wins"]
-                matchups_agg[deck][opp]["losses"] += stats["losses"]
-                matchups_agg[deck][opp]["ties"] += stats["ties"]
+                w = stats["wins"]
+                l = stats["losses"]
+                t = stats["ties"]
+
+                # Direção "deck da página" → oponente
+                matchups_agg[deck][opp]["wins"] += w
+                matchups_agg[deck][opp]["losses"] += l
+                matchups_agg[deck][opp]["ties"] += t
+
+                # Direção espelhada: oponente → deck da página
+                matchups_agg[opp][deck]["wins"] += l
+                matchups_agg[opp][deck]["losses"] += w
+                matchups_agg[opp][deck]["ties"] += t
 
     # 5) Calcula matchup_score e final_score
     for row in base_rows:
@@ -577,4 +587,4 @@ def index():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="127.0.0.1", port=port, debug=False)
