@@ -24,19 +24,8 @@ def parse_percentage_str(s: str):
 
 def extract_overall_or_day(html):
     """
-    Lê o texto inteiro da página e casa linhas do tipo:
+    Casa linhas do tipo:
     307 Gholdengo Lunatone 14.52% 1295 - 1054 - 456 51.59%
-
-    Retorna lista de dicts:
-    {
-        'deck': str,
-        'players': int,
-        'share': float,
-        'wins': int,
-        'losses': int,
-        'ties': int,
-        'win_pct': float,
-    }
     """
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text(" ", strip=True)
@@ -45,7 +34,7 @@ def extract_overall_or_day(html):
         r"(\d+)\s+"                    # players
         r"([A-Z0-9][^%]+?)\s+"         # deck name (preguiçoso)
         r"(\d+[.,]?\d*)%\s+"           # share %
-        r"(\d+)\s*-\s*(\d+)\s*-\s*(\d+)\s+"  # record W - L - T
+        r"(\d+)\s*-\s*(\d+)\s*-\s*(\d+)\s+"  # W - L - T
         r"(\d+[.,]?\d*)%",             # win %
     )
 
@@ -75,16 +64,8 @@ def extract_overall_or_day(html):
 
 def extract_conversion(html):
     """
-    Lê o texto inteiro e casa linhas do tipo:
+    Casa linhas do tipo:
     Gholdengo Lunatone 307 77 25.08%
-
-    Retorna lista de dicts:
-    {
-        'deck': str,
-        'day1_players': int,
-        'day2_players': int,
-        'conv_pct': float,
-    }
     """
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text(" ", strip=True)
@@ -153,7 +134,7 @@ def extract_deck_urls(html, tid):
 
 def extract_matchups_from_html(html_text, this_deck, meta_decks):
     """
-    Extrai matchups no formato real do Labs, por exemplo:
+    Extrai matchups no formato:
 
     Dragapult Dusknoir 361 182 - 125 - 54 55.40%
     Gardevoir 310 154 - 91 - 65 56.67%
@@ -199,7 +180,6 @@ def fetch_matchups_for_deck(deck_url, this_deck, meta_decks):
       { 'Opponent Deck Name': { wins, losses, ties, win_pct }, ... }
     apenas para opponents que estejam em meta_decks.
     """
-    # garante que estamos na aba /matchups
     if not deck_url.endswith("/matchups"):
         deck_url = deck_url.rstrip("/") + "/matchups"
 
@@ -211,6 +191,33 @@ def fetch_matchups_for_deck(deck_url, this_deck, meta_decks):
     matchups = extract_matchups_from_html(text, this_deck, meta_decks)
     print(f"[DEBUG] Matchups de {this_deck} em {deck_url}: {list(matchups.keys())}")
     return matchups
+
+
+# Helper: pega o matchup A vs B na perspectiva de A
+def get_matchup_stats(deck_a, deck_b, matchups_agg):
+    """
+    Retorna stats na perspectiva de deck_a contra deck_b.
+
+    Se existir matchups_agg[deck_a][deck_b], usa direto.
+    Caso contrário, tenta matchups_agg[deck_b][deck_a] e inverte W/L.
+    """
+    forward = matchups_agg.get(deck_a, {}).get(deck_b)
+    if forward:
+        g = forward["wins"] + forward["losses"] + forward["ties"]
+        if g > 0:
+            return forward
+
+    reverse = matchups_agg.get(deck_b, {}).get(deck_a)
+    if reverse:
+        g = reverse["wins"] + reverse["losses"] + reverse["ties"]
+        if g > 0:
+            return {
+                "wins": reverse["losses"],
+                "losses": reverse["wins"],
+                "ties": reverse["ties"],
+            }
+
+    return None
 
 
 # ---------- AGREGAÇÃO ENTRE TORNEIOS (BASE + MATCHUPS) ----------
@@ -256,12 +263,6 @@ def aggregate_tournaments_with_matchups(
     matchup_weight=0.5,
 ):
     """
-    1) Agrega Overall/Day2/Conversion.
-    2) Calcula base_score.
-    3) Define meta_decks = top 'meta_pool_size' em players_overall.
-    4) Para cada meta deck, busca matchups contra outros meta decks.
-    5) Calcula matchup_score e final_score.
-
     Retorna:
       base_rows (lista de decks com métricas e scores),
       matchups_agg[deck][opp] = {wins, losses, ties}
@@ -366,8 +367,7 @@ def aggregate_tournaments_with_matchups(
         if row["deck"] in meta_decks and total_players_meta > 0:
             meta_weight[row["deck"]] = row["players_overall"] / total_players_meta
 
-    # 4) Agrega matchups entre meta_decks (simétrico)
-    # matchups_agg[deck][opp] = {wins, losses, ties}
+    # 4) Agrega matchups entre meta_decks
     matchups_agg = defaultdict(lambda: defaultdict(lambda: {"wins": 0, "losses": 0, "ties": 0}))
 
     for deck in meta_decks:
@@ -387,27 +387,26 @@ def aggregate_tournaments_with_matchups(
                 l = stats["losses"]
                 t = stats["ties"]
 
-                # Direção "deck da página" → oponente
+                # Agrega apenas na direção deck -> opp
                 matchups_agg[deck][opp]["wins"] += w
                 matchups_agg[deck][opp]["losses"] += l
                 matchups_agg[deck][opp]["ties"] += t
 
-                # Direção espelhada: oponente → deck da página
-                matchups_agg[opp][deck]["wins"] += l
-                matchups_agg[opp][deck]["losses"] += w
-                matchups_agg[opp][deck]["ties"] += t
-
-    # 5) Calcula matchup_score e final_score
+    # 5) Calcula matchup_score e final_score usando helper simétrico
     for row in base_rows:
         deck = row["deck"]
-        m_vs = matchups_agg.get(deck, {})
         matchup_score = 0.0
 
-        for opp, s in m_vs.items():
-            games = s["wins"] + s["losses"] + s["ties"]
+        for opp in meta_decks:
+            if opp == deck:
+                continue
+            stats = get_matchup_stats(deck, opp, matchups_agg)
+            if not stats:
+                continue
+            games = stats["wins"] + stats["losses"] + stats["ties"]
             if games <= 0:
                 continue
-            win_pct_vs_opp = (s["wins"] + 0.5 * s["ties"]) / games * 100
+            win_pct_vs_opp = (stats["wins"] + 0.5 * stats["ties"]) / games * 100
             delta = win_pct_vs_opp - 50.0
             weight_opp = meta_weight.get(opp, 0.0)
             matchup_score += weight_opp * delta
@@ -441,6 +440,7 @@ HTML_TEMPLATE = """
     .btn { background: #ffcc00; color: #000; border: none; padding: 8px 16px; cursor: pointer; margin-top: 10px; font-weight: bold; }
     .btn:hover { background: #ffdd33; }
     .container { max-width: 1200px; margin: auto; }
+
     td.cell-good  { background: #1b5e20; color: #fff; }  /* verde */
     td.cell-bad   { background: #7f1d1d; color: #fff; }  /* vermelho */
     td.cell-neutral { background: #424242; color: #fff; }/* cinza médio */
@@ -557,7 +557,8 @@ https://labs.limitlesstcg.com/0046/decks
       </table>
       <p class="small">
         Cada célula mostra o desempenho da <strong>linha</strong> contra a <strong>coluna</strong>:<br>
-        <code>W-L-T (Win%)</code>, por exemplo <code>6-4-0 (60.0%)</code> = 6 vitórias, 4 derrotas, 0 empates, 60% WR.
+        <code>W-L-T (Win%)</code>, por exemplo <code>6-4-0 (60.0%)</code> = 6 vitórias, 4 derrotas, 0 empates, 60% WR.<br>
+        Verde = bom matchup (&ge; 55%), Vermelho = ruim (&le; 45%), Cinza = even.
       </p>
     {% endif %}
   {% endif %}
@@ -632,15 +633,14 @@ def index():
                     # Monta matriz de matchups entre o Top 10
                     matrix_headers = [row["deck"] for row in results]
                     matrix = []
-                    
+
                     for deck_a in matrix_headers:
                         row = []
                         for deck_b in matrix_headers:
                             if deck_a == deck_b:
-                                # diagonal (deck vs ele mesmo)
                                 row.append({"text": "-", "wr": None, "type": "diag"})
                             else:
-                                stats = matchups_agg.get(deck_a, {}).get(deck_b)
+                                stats = get_matchup_stats(deck_a, deck_b, matchups_agg)
                                 if not stats:
                                     row.append({"text": "", "wr": None, "type": "empty"})
                                 else:
